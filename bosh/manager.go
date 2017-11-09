@@ -1,6 +1,7 @@
 package bosh
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -8,7 +9,6 @@ import (
 	yaml "gopkg.in/yaml.v2"
 
 	"github.com/cloudfoundry/bosh-bootloader/storage"
-	"github.com/cloudfoundry/bosh-bootloader/terraform"
 )
 
 var (
@@ -33,49 +33,51 @@ type directorVars struct {
 }
 
 type sharedDeploymentVarsYAML struct {
-	InternalCIDR string    `yaml:"internal_cidr,omitempty"`
+	InternalCIDR string    `json:"internal_cidr" yaml:"internal_cidr,omitempty"`
 	InternalGW   string    `yaml:"internal_gw,omitempty"`
 	InternalIP   string    `yaml:"internal_ip,omitempty"`
 	DirectorName string    `yaml:"director_name,omitempty"`
-	ExternalIP   string    `yaml:"external_ip,omitempty"`
-	PrivateKey   string    `yaml:"private_key,flow,omitempty"`
+	ExternalIP   string    `json:"bosh_director_external_ip" yaml:"external_ip,omitempty"`
+	PrivateKey   string    `json:"bosh_vms_private_key" yaml:"private_key,flow,omitempty"`
 	AWSYAML      AWSYAML   `yaml:",inline"`
 	GCPYAML      GCPYAML   `yaml:",inline"`
 	AzureYAML    AzureYAML `yaml:",inline"`
 }
 
 type AWSYAML struct {
-	AZ                    string   `yaml:"az,omitempty"`
-	SubnetID              string   `yaml:"subnet_id,omitempty"`
-	AccessKeyID           string   `yaml:"access_key_id,omitempty"`
-	SecretAccessKey       string   `yaml:"secret_access_key,omitempty"`
-	IAMInstanceProfile    string   `yaml:"iam_instance_profile,omitempty"`
-	DefaultKeyName        string   `yaml:"default_key_name,omitempty"`
-	DefaultSecurityGroups []string `yaml:"default_security_groups,omitempty"`
-	Region                string   `yaml:"region,omitempty"`
-	KMSKeyARN             string   `yaml:"kms_key_arn,omitempty"`
+	AZ                            string   `json:"bosh_subnet_availability_zone" yaml:"az,omitempty"`
+	SubnetID                      string   `json:"bosh_subnet_id" yaml:"subnet_id,omitempty"`
+	AccessKeyID                   string   `yaml:"access_key_id,omitempty"`
+	SecretAccessKey               string   `yaml:"secret_access_key,omitempty"`
+	IAMInstanceProfile            string   `json:"bosh_iam_instance_profile" yaml:"iam_instance_profile,omitempty"`
+	DefaultKeyName                string   `json:"bosh_vms_key_name" yaml:"default_key_name,omitempty"`
+	DirectorDefaultSecurityGroups []string `json:"bosh_security_group" yaml:"default_security_groups,omitempty"`
+	JumpboxDefaultSecurityGroups  []string `json:"jumpbox_security_group" yaml:"default_security_groups,omitempty"`
+	Region                        string   `yaml:"region,omitempty"`
+	KMSKeyARN                     string   `json:"kms_key_arn" yaml:"kms_key_arn,omitempty"`
 }
 
 type GCPYAML struct {
 	Zone           string   `yaml:"zone,omitempty"`
-	Network        string   `yaml:"network,omitempty"`
-	Subnetwork     string   `yaml:"subnetwork,omitempty"`
-	Tags           []string `yaml:"tags,omitempty"`
+	Network        string   `json:"network_name" yaml:"network,omitempty"`
+	Subnetwork     string   `json:"subnetwork_name" yaml:"subnetwork,omitempty"`
+	DirectorTags   []string `json:"director_tags" yaml:"tags,omitempty"`
+	JumpboxTags    []string `json:"jumpbox_tags" yaml:"tags,omitempty"`
 	ProjectID      string   `yaml:"project_id,omitempty"`
 	CredentialJSON string   `yaml:"gcp_credentials_json,omitempty"`
 }
 
 type AzureYAML struct {
-	VNetName             string `yaml:"vnet_name,omitempty"`
-	SubnetName           string `yaml:"subnet_name,omitempty"`
-	SubscriptionID       string `yaml:"subscription_id,omitempty"`
-	TenantID             string `yaml:"tenant_id,omitempty"`
-	ClientID             string `yaml:"client_id,omitempty"`
-	ClientSecret         string `yaml:"client_secret,omitempty"`
-	ResourceGroupName    string `yaml:"resource_group_name,omitempty"`
-	StorageAccountName   string `yaml:"storage_account_name,omitempty"`
-	DefaultSecurityGroup string `yaml:"default_security_group,omitempty"`
-	PublicKey            string `yaml:"public_key,flow,omitempty"`
+	VNetName              string `json:"bosh_network_name" yaml:"vnet_name,omitempty"`
+	SubnetName            string `json:"bosh_subnet_name" yaml:"subnet_name,omitempty"`
+	SubscriptionID        string `yaml:"subscription_id,omitempty"`
+	TenantID              string `yaml:"tenant_id,omitempty"`
+	ClientID              string `yaml:"client_id,omitempty"`
+	ClientSecret          string `yaml:"client_secret,omitempty"`
+	ResourceGroupName     string `json:"bosh_resource_group_name" yaml:"resource_group_name,omitempty"`
+	StorageAccountName    string `json:"bosh_storage_account_name" yaml:"storage_account_name,omitempty"`
+	DirectorSecurityGroup string `json:"bosh_default_security_group" yaml:"default_security_group,omitempty"`
+	PublicKey             string `yaml:"public_key,flow,omitempty"`
 }
 
 type executor interface {
@@ -151,7 +153,7 @@ func (m *Manager) InitializeJumpbox(state storage.State) error {
 	return nil
 }
 
-func (m *Manager) CreateJumpbox(state storage.State, terraformOutputs terraform.Outputs) (storage.State, error) {
+func (m *Manager) CreateJumpbox(state storage.State, terraformOutputs []byte) (storage.State, error) {
 	m.logger.Step("creating jumpbox")
 
 	varsDir, err := m.stateStore.GetVarsDir()
@@ -161,6 +163,7 @@ func (m *Manager) CreateJumpbox(state storage.State, terraformOutputs terraform.
 
 	stateDir := m.stateStore.GetStateDir()
 	osUnsetenv("BOSH_ALL_PROXY")
+
 	variables, err := m.executor.CreateEnv(CreateEnvInput{
 		Deployment:     "jumpbox",
 		VarsDir:        varsDir,
@@ -180,9 +183,10 @@ func (m *Manager) CreateJumpbox(state storage.State, terraformOutputs terraform.
 	}
 	m.logger.Step("created jumpbox")
 
+	deploymentVars := unmarshalTerraformOutputs(terraformOutputs)
 	state.Jumpbox = storage.Jumpbox{
 		Variables: variables,
-		URL:       terraformOutputs.GetString("jumpbox_url"),
+		URL:       fmt.Sprintf("%s:22", deploymentVars.ExternalIP),
 	}
 
 	m.logger.Step("starting socks5 proxy to jumpbox")
@@ -237,7 +241,7 @@ func (m *Manager) InitializeDirector(state storage.State) error {
 	return nil
 }
 
-func (m *Manager) CreateDirector(state storage.State, terraformOutputs terraform.Outputs) (storage.State, error) {
+func (m *Manager) CreateDirector(state storage.State, terraformOutputs []byte) (storage.State, error) {
 	m.logger.Step("creating bosh director")
 
 	varsDir, err := m.stateStore.GetVarsDir()
@@ -284,7 +288,7 @@ func (m *Manager) CreateDirector(state storage.State, terraformOutputs terraform
 	return state, nil
 }
 
-func (m *Manager) DeleteDirector(state storage.State, terraformOutputs terraform.Outputs) error {
+func (m *Manager) DeleteDirector(state storage.State) error {
 	varsDir, err := m.stateStore.GetVarsDir()
 	if err != nil {
 		return fmt.Errorf("Get vars dir: %s", err)
@@ -345,7 +349,7 @@ func (m *Manager) DeleteDirector(state storage.State, terraformOutputs terraform
 	return nil
 }
 
-func (m *Manager) DeleteJumpbox(state storage.State, terraformOutputs terraform.Outputs) error {
+func (m *Manager) DeleteJumpbox(state storage.State) error {
 	m.logger.Step("destroying jumpbox")
 
 	varsDir, err := m.stateStore.GetVarsDir()
@@ -390,8 +394,18 @@ func (m *Manager) DeleteJumpbox(state storage.State, terraformOutputs terraform.
 	return nil
 }
 
-func (m *Manager) GetJumpboxDeploymentVars(state storage.State, terraformOutputs terraform.Outputs) string {
-	internalCIDR := terraformOutputs.GetString("internal_cidr")
+func unmarshalTerraformOutputs(terraformOutputs []byte) sharedDeploymentVarsYAML {
+	var deploymentVars sharedDeploymentVarsYAML
+	err := json.Unmarshal(terraformOutputs, &deploymentVars)
+	if err != nil {
+		panic(err)
+	}
+	return deploymentVars
+}
+
+func (m *Manager) GetJumpboxDeploymentVars(state storage.State, terraformOutputs []byte) string {
+	deploymentVars := unmarshalTerraformOutputs(terraformOutputs)
+	internalCIDR := deploymentVars.InternalCIDR
 
 	parsedInternalCIDR, err := ParseCIDRBlock(internalCIDR)
 	if err != nil {
@@ -399,53 +413,31 @@ func (m *Manager) GetJumpboxDeploymentVars(state storage.State, terraformOutputs
 		parsedInternalCIDR, _ = ParseCIDRBlock(internalCIDR)
 	}
 
-	vars := sharedDeploymentVarsYAML{
-		InternalCIDR: internalCIDR,
-		InternalGW:   parsedInternalCIDR.GetNthIP(1).String(),
-		InternalIP:   parsedInternalCIDR.GetNthIP(5).String(),
-		DirectorName: fmt.Sprintf("bosh-%s", state.EnvID),
-		ExternalIP:   terraformOutputs.GetString("external_ip"),
-	}
+	deploymentVars.InternalGW = parsedInternalCIDR.GetNthIP(1).String()
+	deploymentVars.InternalIP = parsedInternalCIDR.GetNthIP(5).String()
+	deploymentVars.DirectorName = fmt.Sprintf("bosh-%s", state.EnvID)
 
 	switch state.IAAS {
 	case "gcp":
-		vars.GCPYAML = GCPYAML{
-			Zone:           state.GCP.Zone,
-			Network:        terraformOutputs.GetString("network_name"),
-			Subnetwork:     terraformOutputs.GetString("subnetwork_name"),
-			Tags:           terraformOutputs.GetStringSlice("jumpbox_tags"),
-			ProjectID:      state.GCP.ProjectID,
-			CredentialJSON: state.GCP.ServiceAccountKey,
-		}
+		deploymentVars.GCPYAML.Zone = state.GCP.Zone
+		deploymentVars.GCPYAML.ProjectID = state.GCP.ProjectID
+		deploymentVars.GCPYAML.CredentialJSON = state.GCP.ServiceAccountKey
 	case "aws":
-		vars.AWSYAML = AWSYAML{
-			AZ:                    terraformOutputs.GetString("bosh_subnet_availability_zone"),
-			SubnetID:              terraformOutputs.GetString("bosh_subnet_id"),
-			AccessKeyID:           state.AWS.AccessKeyID,
-			SecretAccessKey:       state.AWS.SecretAccessKey,
-			IAMInstanceProfile:    terraformOutputs.GetString("bosh_iam_instance_profile"),
-			DefaultKeyName:        terraformOutputs.GetString("bosh_vms_key_name"),
-			DefaultSecurityGroups: terraformOutputs.GetStringSlice("jumpbox_security_group"),
-			Region:                state.AWS.Region,
-		}
-		vars.PrivateKey = terraformOutputs.GetString("bosh_vms_private_key")
+		deploymentVars.AWSYAML.AccessKeyID = state.AWS.AccessKeyID
+		deploymentVars.AWSYAML.SecretAccessKey = state.AWS.SecretAccessKey
+		deploymentVars.AWSYAML.Region = state.AWS.Region
 	case "azure":
-		vars.AzureYAML = AzureYAML{
-			VNetName:             terraformOutputs.GetString("bosh_network_name"),
-			SubnetName:           terraformOutputs.GetString("bosh_subnet_name"),
-			SubscriptionID:       state.Azure.SubscriptionID,
-			TenantID:             state.Azure.TenantID,
-			ClientID:             state.Azure.ClientID,
-			ClientSecret:         state.Azure.ClientSecret,
-			ResourceGroupName:    terraformOutputs.GetString("bosh_resource_group_name"),
-			StorageAccountName:   terraformOutputs.GetString("bosh_storage_account_name"),
-			DefaultSecurityGroup: terraformOutputs.GetString("bosh_default_security_group"),
-			PublicKey:            terraformOutputs.GetString("bosh_vms_public_key"),
-		}
-		vars.PrivateKey = terraformOutputs.GetString("bosh_vms_private_key")
+		deploymentVars.AzureYAML.SubscriptionID = state.Azure.SubscriptionID
+		deploymentVars.AzureYAML.TenantID = state.Azure.TenantID
+		deploymentVars.AzureYAML.ClientID = state.Azure.ClientID
+		deploymentVars.AzureYAML.ClientSecret = state.Azure.ClientSecret
 	}
 
-	return string(mustMarshal(vars))
+	content, err := yaml.Marshal(deploymentVars)
+	if err != nil {
+		panic(err)
+	}
+	return string(content)
 }
 
 func mustMarshal(yamlStruct interface{}) []byte {
@@ -457,8 +449,9 @@ func mustMarshal(yamlStruct interface{}) []byte {
 	return yamlBytes
 }
 
-func (m *Manager) GetDirectorDeploymentVars(state storage.State, terraformOutputs terraform.Outputs) string {
-	internalCIDR := terraformOutputs.GetString("internal_cidr")
+func (m *Manager) GetDirectorDeploymentVars(state storage.State, terraformOutputs []byte) string {
+	deploymentVars := unmarshalTerraformOutputs(terraformOutputs)
+	internalCIDR := deploymentVars.InternalCIDR
 
 	parsedInternalCIDR, err := ParseCIDRBlock(internalCIDR)
 	if err != nil {
@@ -466,52 +459,50 @@ func (m *Manager) GetDirectorDeploymentVars(state storage.State, terraformOutput
 		parsedInternalCIDR, _ = ParseCIDRBlock(internalCIDR)
 	}
 
-	vars := sharedDeploymentVarsYAML{
-		InternalCIDR: internalCIDR,
-		InternalGW:   parsedInternalCIDR.GetNthIP(1).String(),
-		InternalIP:   parsedInternalCIDR.GetNthIP(6).String(),
-		DirectorName: fmt.Sprintf("bosh-%s", state.EnvID),
-		ExternalIP:   terraformOutputs.GetString("bosh_director_external_ip"),
-	}
+	// vars := sharedDeploymentVarsYAML{
+	// deploymentVars.InternalCIDR = internalCIDR
+	deploymentVars.InternalGW = parsedInternalCIDR.GetNthIP(1).String()
+	deploymentVars.InternalIP = parsedInternalCIDR.GetNthIP(6).String()
+	deploymentVars.DirectorName = fmt.Sprintf("bosh-%s", state.EnvID)
+	// 	ExternalIP:   terraformOutputs.GetString("bosh_director_external_ip"),
+	// }
 
 	switch state.IAAS {
 	case "gcp":
-		vars.GCPYAML = GCPYAML{
-			Zone:           state.GCP.Zone,
-			Network:        terraformOutputs.GetString("network_name"),
-			Subnetwork:     terraformOutputs.GetString("subnetwork_name"),
-			Tags:           terraformOutputs.GetStringSlice("director_tags"),
-			ProjectID:      state.GCP.ProjectID,
-			CredentialJSON: state.GCP.ServiceAccountKey,
-		}
+		deploymentVars.GCPYAML.Zone = state.GCP.Zone
+		deploymentVars.GCPYAML.ProjectID = state.GCP.ProjectID
+		deploymentVars.GCPYAML.CredentialJSON = state.GCP.ServiceAccountKey
+		// Network:        terraformOutputs.GetString("network_name"),
+		// Subnetwork:     terraformOutputs.GetString("subnetwork_name"),
+		// Tags:           terraformOutputs.GetStringSlice("director_tags"),
 	case "aws":
-		vars.AWSYAML = AWSYAML{
-			AZ:                    terraformOutputs.GetString("bosh_subnet_availability_zone"),
-			SubnetID:              terraformOutputs.GetString("bosh_subnet_id"),
-			AccessKeyID:           state.AWS.AccessKeyID,
-			SecretAccessKey:       state.AWS.SecretAccessKey,
-			IAMInstanceProfile:    terraformOutputs.GetString("bosh_iam_instance_profile"),
-			DefaultKeyName:        terraformOutputs.GetString("bosh_vms_key_name"),
-			DefaultSecurityGroups: terraformOutputs.GetStringSlice("bosh_security_group"),
-			Region:                state.AWS.Region,
-			KMSKeyARN:             terraformOutputs.GetString("kms_key_arn"),
-		}
-		vars.PrivateKey = terraformOutputs.GetString("bosh_vms_private_key")
+		// AZ:                    terraformOutputs.GetString("bosh_subnet_availability_zone"),
+		// SubnetID:              terraformOutputs.GetString("bosh_subnet_id"),
+		deploymentVars.AWSYAML.AccessKeyID = state.AWS.AccessKeyID
+		deploymentVars.AWSYAML.SecretAccessKey = state.AWS.SecretAccessKey
+		// IAMInstanceProfile:    terraformOutputs.GetString("bosh_iam_instance_profile"),
+		// DefaultKeyName:        terraformOutputs.GetString("bosh_vms_key_name"),
+		// DefaultSecurityGroups: terraformOutputs.GetStringSlice("bosh_security_group"),
+		deploymentVars.AWSYAML.Region = state.AWS.Region
+		// KMSKeyARN:             terraformOutputs.GetString("kms_key_arn"),
+		// deploymentVars.PrivateKey = terraformOutputs.GetString("bosh_vms_private_key")
 	case "azure":
-		vars.AzureYAML = AzureYAML{
-			VNetName:             terraformOutputs.GetString("bosh_network_name"),
-			SubnetName:           terraformOutputs.GetString("bosh_subnet_name"),
-			SubscriptionID:       state.Azure.SubscriptionID,
-			TenantID:             state.Azure.TenantID,
-			ClientID:             state.Azure.ClientID,
-			ClientSecret:         state.Azure.ClientSecret,
-			ResourceGroupName:    terraformOutputs.GetString("bosh_resource_group_name"),
-			StorageAccountName:   terraformOutputs.GetString("bosh_storage_account_name"),
-			DefaultSecurityGroup: terraformOutputs.GetString("bosh_default_security_group"),
-		}
+		// VNetName:             terraformOutputs.GetString("bosh_network_name"),
+		// SubnetName:           terraformOutputs.GetString("bosh_subnet_name"),
+		deploymentVars.AzureYAML.SubscriptionID = state.Azure.SubscriptionID
+		deploymentVars.AzureYAML.TenantID = state.Azure.TenantID
+		deploymentVars.AzureYAML.ClientID = state.Azure.ClientID
+		deploymentVars.AzureYAML.ClientSecret = state.Azure.ClientSecret
+		// ResourceGroupName:    terraformOutputs.GetString("bosh_resource_group_name"),
+		// StorageAccountName:   terraformOutputs.GetString("bosh_storage_account_name"),
+		// DefaultSecurityGroup: terraformOutputs.GetString("bosh_default_security_group"),
 	}
 
-	return string(mustMarshal(vars))
+	content, err := yaml.Marshal(deploymentVars)
+	if err != nil {
+		panic(err)
+	}
+	return string(content)
 }
 
 func getJumpboxPrivateKey(v string) (string, error) {

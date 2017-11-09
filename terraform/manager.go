@@ -22,7 +22,7 @@ type executor interface {
 	Destroy(inputs map[string]interface{}) error
 	Init(terraformTemplate string, inputs map[string]interface{}) error
 	Apply() error
-	Outputs() (map[string]interface{}, error)
+	Outputs() ([]byte, error)
 	Output(string) (string, error)
 }
 
@@ -127,13 +127,8 @@ func (m Manager) Destroy(bblState storage.State) (storage.State, error) {
 	return bblState, nil
 }
 
-func (m Manager) GetOutputs() (Outputs, error) {
-	tfOutputs, err := m.executor.Outputs()
-	if err != nil {
-		return Outputs{}, err
-	}
-
-	return Outputs{Map: tfOutputs}, nil
+func (m Manager) GetOutputs() ([]byte, error) {
+	return m.executor.Outputs()
 }
 
 func readAndReset(buf *bytes.Buffer) string {
