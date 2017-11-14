@@ -255,13 +255,13 @@ internal_ip: 10.0.0.5
 director_name: bosh-some-env-id
 external_ip: some-external-ip
 zone: some-zone
+project_id: some-project-id
+gcp_credentials_json: some-credential-json
 network: some-network
 subnetwork: some-subnetwork
 tags:
 - some-jumpbox-tag
 - some-jumpbox-fw-tag
-project_id: some-project-id
-gcp_credentials_json: some-credential-json
 `
 
 			createEnvArgs = []string{"bosh", "create-env", "/path/to/manifest.yml", "etc"}
@@ -273,7 +273,7 @@ gcp_credentials_json: some-credential-json
 		})
 
 		Describe("InitializeJumpbox", func() {
-			It("calls JumpboxCreateEnvArgsCall appropriately", func() {
+			FIt("calls JumpboxCreateEnvArgsCall appropriately", func() {
 				err := boshManager.InitializeJumpbox(state)
 				Expect(err).NotTo(HaveOccurred())
 

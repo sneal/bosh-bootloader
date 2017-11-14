@@ -3,7 +3,6 @@ package commands
 import (
 	"github.com/cloudfoundry/bosh-bootloader/certs"
 	"github.com/cloudfoundry/bosh-bootloader/storage"
-	"github.com/cloudfoundry/bosh-bootloader/terraform"
 )
 
 type plan interface {
@@ -22,7 +21,7 @@ type up interface {
 
 type terraformManager interface {
 	ValidateVersion() error
-	GetOutputs() (terraform.Outputs, error)
+	GetOutputs() ([]byte, error)
 	Init(storage.State) error
 	Apply(storage.State) (storage.State, error)
 	Destroy(storage.State) (storage.State, error)
@@ -30,13 +29,13 @@ type terraformManager interface {
 
 type boshManager interface {
 	InitializeDirector(bblState storage.State) error
-	CreateDirector(bblState storage.State, terraformOutputs terraform.Outputs) (storage.State, error)
+	CreateDirector(bblState storage.State, terraformOutputs []byte) (storage.State, error)
 	InitializeJumpbox(bblState storage.State) error
-	CreateJumpbox(bblState storage.State, terraformOutputs terraform.Outputs) (storage.State, error)
-	DeleteDirector(bblState storage.State, terraformOutputs terraform.Outputs) error
-	DeleteJumpbox(bblState storage.State, terraformOutputs terraform.Outputs) error
-	GetDirectorDeploymentVars(bblState storage.State, terraformOutputs terraform.Outputs) string
-	GetJumpboxDeploymentVars(bblState storage.State, terraformOutputs terraform.Outputs) string
+	CreateJumpbox(bblState storage.State, terraformOutputs []byte) (storage.State, error)
+	DeleteDirector(bblState storage.State, terraformOutputs []byte) error
+	DeleteJumpbox(bblState storage.State, terraformOutputs []byte) error
+	GetDirectorDeploymentVars(bblState storage.State, terraformOutputs []byte) string
+	GetJumpboxDeploymentVars(bblState storage.State, terraformOutputs []byte) string
 	Version() (string, error)
 }
 

@@ -2,7 +2,6 @@ package terraform
 
 import (
 	"bytes"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -192,33 +191,22 @@ func (e Executor) Output(outputName string) (string, error) {
 	return strings.TrimSuffix(buffer.String(), "\n"), nil
 }
 
-func (e Executor) Outputs() (map[string]interface{}, error) {
+func (e Executor) Outputs() ([]byte, error) {
 	varsDir, err := e.stateStore.GetVarsDir()
 	if err != nil {
-		return map[string]interface{}{}, fmt.Errorf("Get vars dir: %s", err)
+		return []byte{}, fmt.Errorf("Get vars dir: %s", err)
 	}
 
 	err = e.cmd.Run(os.Stdout, varsDir, []string{"init"}, false)
 	if err != nil {
-		return map[string]interface{}{}, fmt.Errorf("Run terraform init in vars dir: %s", err)
+		return []byte{}, fmt.Errorf("Run terraform init in vars dir: %s", err)
 	}
 
 	buffer := bytes.NewBuffer([]byte{})
 	err = e.cmd.Run(buffer, varsDir, []string{"output", "--json"}, true)
 	if err != nil {
-		return map[string]interface{}{}, fmt.Errorf("Run terraform output --json in vars dir: %s", err)
+		return []byte{}, fmt.Errorf("Run terraform output --json in vars dir: %s", err)
 	}
 
-	tfOutputs := map[string]tfOutput{}
-	err = json.Unmarshal(buffer.Bytes(), &tfOutputs)
-	if err != nil {
-		return map[string]interface{}{}, fmt.Errorf("Unmarshal terraform output: %s", err)
-	}
-
-	outputs := map[string]interface{}{}
-	for tfKey, tfValue := range tfOutputs {
-		outputs[tfKey] = tfValue.Value
-	}
-
-	return outputs, nil
+	return buffer.Bytes(), nil
 }
